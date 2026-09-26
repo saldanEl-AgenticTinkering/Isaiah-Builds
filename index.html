@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Isaiah Builds</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<style>
+  html, body { margin: 0; height: 100%; background: #1d2b3a; font-family: "Trebuchet MS", Arial, sans-serif; overflow: hidden; }
+  #wrap { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+  h1 { margin: 0; color: #ffd84d; font-size: 28px; letter-spacing: 1px; text-shadow: 2px 2px 0 #b8560b; }
+  canvas { background: #87ceeb; border: 4px solid #ffd84d; border-radius: 8px; max-width: 96vw; max-height: 78vh; cursor: crosshair; image-rendering: pixelated; }
+  #help { color: #dbe7f3; font-size: 14px; text-align: center; line-height: 1.7; }
+  html, body, canvas { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  /* On a touch screen (iPad) give the game the whole screen */
+  body.touch h1, body.touch #help { display: none; }
+  body.touch canvas { max-width: 100vw; max-height: 100vh; max-height: 100dvh; border-width: 2px; border-radius: 0; }
+  kbd { background: #33475b; padding: 1px 6px; border-radius: 4px; border: 1px solid #55708a; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>ISAIAH BUILDS</h1>
+  <canvas id="game" width="960" height="540"></canvas>
+  <div id="help">
+    <kbd>A</kbd><kbd>D</kbd> or arrows to move &nbsp; <kbd>Space</kbd> jump / swim up &nbsp;
+    <b>Left click</b> build &nbsp; <b>Right click</b> (or <kbd>X</kbd>) break &nbsp; <kbd>1</kbd>-<kbd>7</kbd> pick block<br>
+    <kbd>V</kbd> choose a living thing &nbsp; <kbd>C</kbd> make one where the mouse is &nbsp; <kbd>R</kbd> new world
+  </div>
+</div>
+<script>
+/* ============================================================
+   ISAIAH'S SETTINGS  -  change a number or a color, save the
+   file, then refresh the browser to see what happens!
+   ============================================================ */
+var ISAIAH = {
+  // How fast the builder walks. Try 6 for super speed!
+  walkSpeed: 3.2,
+
+  // How high the builder jumps. Try 16 for a giant jump!
+  jumpPower: 10.5,
+
+  // How strongly the world pulls you down. Try 0.2 for moon gravity!
+  gravity: 0.55,
+
+  // How far away you can build, counted in blocks.
+  buildReach: 6,
+
+  // Colors of the builder (any color name or #ff00ff style code)
+  shirtColor: "#2f80ed",
+  hatColor: "#ffd84d",
+
+  // The sky, from top to bottom. Try "#1a0033" and "#6a0dad" for a night sky!
+  skyTop: "#5aa9e6",
+  skyBottom: "#bfe6ff",
+
+  // Your seven blocks. Change the name or the color, or invent a new one!
+  blockNames:  ["Grass", "Dirt", "Stone", "Wood", "Brick", "Glass", "Water"],
+  blockColors: ["#5cb85c", "#8b5a2b", "#8a8f98", "#c98f4a", "#c1440e", "rgba(160,220,255,0.55)", "rgba(30,110,220,0.55)"],
+
+  // How many living things start in the world. Try 30 fish!
+  howManyBunnies: 5,
+  howManyFish: 10,
+  howManyBirds: 4,
+
+  // Colors of the living things
+  bunnyColor: "#f4f1ea",
+  fishColor: "#ff8c1a",
+  birdColor: "#e63946"
+};
+
+(function () {
+  "use strict";
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  var W = canvas.width, H = canvas.height;
+  var T = 32;               // tile size in pixels
+  var COLS = 80, ROWS = 32; // world size in tiles
+  var GROUND = 20;          // the top of the island
+  var SEABED = GROUND + 6;  // the floor of the sea
+  var REACH = ISAIAH.buildReach; // how far (in tiles) the player can build
+  var WATER = 7;            // block number of water
+  var NUM_BLOCKS = 7;
+
+  // Block types. 0 is empty air.
+  var BLOCKS = [
+    null,
+    { name: ISAIAH.blockNames[0], color: ISAIAH.blockColors[0], top: "#3d9a3d" },
+    { name: ISAIAH.blockNames[1], color: ISAIAH.blockColors[1], top: "#734a22" },
+    { name: ISAIAH.blockNames[2], color: ISAIAH.blockColors[2], top: "#6f747c" },
+    { name: ISAIAH.blockNames[3], color: ISAIAH.blockColors[3], top: "#a8733a" },
+    { name: ISAIAH.blockNames[4], color: ISAIAH.blockColors[4], top: "#8f300a" },
+    { name: ISAIAH.blockNames[5], color: ISAIAH.blockColors[5], top: "rgba(255,255,255,0.8)" },
+    { name: ISAIAH.blockNames[6], color: ISAIAH.blockColors[6], top: "rgba(255,255,255,0.6)" }
+  ];
+
+  var world = [];
+  var SAVE_KEY = "isaiah-builds-world-v2";
+
+  // An island in the middle of the world, surrounded by water.
+  function freshWorld() {
+    var w = [], x, y;
+    for (y = 0; y < ROWS; y++) {
+      var row = [];
+      for (x = 0; x < COLS; x++) row.push(0);
+      w.push(row);
+    }
+    var center = COLS / 2, halfWidth = 18;
+    for (x = 0; x < COLS; x++) {
+      var d = Math.abs(x + 0.5 - center) / halfWidth;
+      var top;
+      if (d < 0.7) top = GROUND;                                            // flat top of the island
+      else if (d >= 1) top = SEABED;                                        // the sea floor
+      else top = Math.min(SEABED, GROUND + Math.ceil((d - 0.7) / 0.3 * (SEABED - GROUND))); // the beach slopes down
+      // water fills everything above the ground, from just below the island top
+      for (y = GROUND + 1; y < top; y++) w[y][x] = WATER;
+      // ground
+      for (y = top; y < ROWS; y++) {
+        var depth = y - top;
+        if (depth === 0) w[y][x] = (top <= GROUND + 1) ? 1 : 2;   // grass on land, dirt under the sea
+        else if (depth <= 2) w[y][x] = 2;
+        else w[y][x] = 3;
+      }
+    }
+    return w;
+  }
+
+  function saveWorld() {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(world)); } catch (e) {}
+  }
+  function loadWorld() {
+    try {
+      var s = localStorage.getItem(SAVE_KEY);
+      if (s) {
+        var w = JSON.parse(s);
+        if (w && w.length === ROWS && w[0].length === COLS) return w;
+      }
+    } catch (e) {}
+    return null;
+  }
+  world = loadWorld() || freshWorld();
+
+  function blockAt(tx, ty) {
+    if (tx < 0 || tx >= COLS) return 3;      // invisible walls at the sides
+    if (ty < 0) return 0;
+    if (ty >= ROWS) return 3;
+    return world[ty][tx];
+  }
+  function solidAt(tx, ty) {
+    var b = blockAt(tx, ty);
+    return b !== 0 && b !== WATER;           // you can walk through air and water
+  }
+
+  // Player
+  var player = { x: (COLS / 2) * T, y: (GROUND - 3) * T, w: 22, h: 44, vx: 0, vy: 0, onGround: false, facing: 1 };
+  var selected = 1;
+  var jumpBuffer = 0;
+  var lastResetPress = 0;
+  var keys = {};
+  var mouse = { x: 0, y: 0 };
+  var cam = { x: 0, y: 0 };
+  var tick = 0;
+  var clouds = [];
+  for (var c = 0; c < 10; c++) clouds.push({ x: Math.random() * COLS * T, y: 30 + Math.random() * 180, s: 0.6 + Math.random() * 0.9 });
+
+  // ---------------------------------------------------------------
+  // LIVING THINGS
+  // Each kind says where it lives and how big it is.
+  // ---------------------------------------------------------------
+  var KINDS = {
+    bunny: { name: "Bunny", w: 22, h: 18 },
+    fish:  { name: "Fish",  w: 22, h: 12 },
+    bird:  { name: "Bird",  w: 20, h: 14 }
+  };
+  var KIND_LIST = ["bunny", "fish", "bird"];
+  var chosenKind = 0;
+  var creatures = [];
+  var MAX_CREATURES = 80;
+  var message = "", messageTimer = 0;
+
+  function say(text) { message = text; messageTimer = 120; }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function makeCreature(kind, x, y) {
+    var k = KINDS[kind];
+    return { kind: kind, x: x, y: y, w: k.w, h: k.h, vx: 0, vy: 0, dir: Math.random() < 0.5 ? -1 : 1,
+             timer: 0, onGround: false, base: y, phase: Math.random() * 6 };
+  }
+
+  // Are all the tiles under this box water?
+  function allWater(x, y, w, h) {
+    var x0 = Math.floor(x / T), x1 = Math.floor((x + w - 0.001) / T);
+    var y0 = Math.floor(y / T), y1 = Math.floor((y + h - 0.001) / T);
+    for (var ty = y0; ty <= y1; ty++)
+      for (var tx = x0; tx <= x1; tx++)
+        if (blockAt(tx, ty) !== WATER) return false;
+    return true;
+  }
+
+  function spawnStartingCreatures() {
+    var i, tries, x, y;
+    creatures = [];
+    for (i = 0; i < ISAIAH.howManyBunnies; i++) {
+      x = (COLS / 2 + rand(-9, 9)) * T;
+      creatures.push(makeCreature("bunny", x, (GROUND - 2) * T));
+    }
+    for (i = 0; i < ISAIAH.howManyFish; i++) {
+      for (tries = 0; tries < 60; tries++) {
+        x = rand(2, COLS - 3) * T; y = rand(GROUND + 2, SEABED - 1) * T;
+        if (allWater(x, y, KINDS.fish.w, KINDS.fish.h)) { creatures.push(makeCreature("fish", x, y)); break; }
+      }
+    }
+    for (i = 0; i < ISAIAH.howManyBirds; i++) {
+      creatures.push(makeCreature("bird", rand(2, COLS - 3) * T, rand(3, 9) * T));
+    }
+  }
+  spawnStartingCreatures();
+
+  // Make a living thing where the mouse points
+  function spawnAtMouse() { spawnAt(mouse.x + cam.x, mouse.y + cam.y); }
+  // Make a living thing centered on a spot in the world (in pixels)
+  function spawnAt(wx, wy) {
+    if (creatures.length >= MAX_CREATURES) { say("That is a lot of animals! No more room."); return; }
+    var kind = KIND_LIST[chosenKind];
+    var x = wx - KINDS[kind].w / 2, y = wy - KINDS[kind].h / 2;
+    if (kind === "fish" && !allWater(x, y, KINDS.fish.w, KINDS.fish.h)) { say("Fish need water! Point at the water."); return; }
+    if (kind === "bird" && allWater(x, y, KINDS.bird.w, KINDS.bird.h)) { say("Birds fly in the sky. Point above the water."); return; }
+    if (kind !== "fish" && collides(x, y, KINDS[kind].w, KINDS[kind].h)) { say("No room there. Try an empty spot."); return; }
+    creatures.push(makeCreature(kind, x, y));
+  }
+
+  function updateCreature(a) {
+    var g;
+    if (a.kind === "bunny") {
+      a.timer--;
+      if (a.timer <= 0) { a.dir = [-1, 0, 1][Math.floor(Math.random() * 3)]; a.timer = 40 + Math.floor(Math.random() * 90); }
+      var inWater = blockAt(Math.floor((a.x + a.w / 2) / T), Math.floor((a.y + a.h / 2) / T)) === WATER;
+      a.vx = a.dir * 0.8;
+      if (a.onGround && a.dir !== 0 && Math.random() < 0.02) a.vy = -6.5;  // little hop
+      // do not walk off into the water on purpose
+      if (a.onGround && a.dir !== 0) {
+        var frontX = Math.floor((a.x + (a.dir > 0 ? a.w + 4 : -4)) / T);
+        var footY = Math.floor((a.y + a.h + 2) / T);
+        if (blockAt(frontX, footY) === WATER || blockAt(frontX, footY) === 0) { a.dir = -a.dir; a.vx = 0; }
+      }
+      a.x += a.vx;
+      if (collides(a.x, a.y, a.w, a.h)) { a.x -= a.vx; a.dir = -a.dir; }
+      g = inWater ? 0.1 : 0.5;
+      a.vy += g;
+      if (inWater) a.vy = Math.max(-2, a.vy - 0.6);   // bunnies paddle up
+      if (a.vy > 10) a.vy = 10;
+      a.y += a.vy; a.onGround = false;
+      if (collides(a.x, a.y, a.w, a.h)) {
+        if (a.vy > 0) { a.y = Math.floor((a.y + a.h) / T) * T - a.h; a.onGround = true; }
+        else { a.y = Math.floor(a.y / T) * T + T; }
+        a.vy = 0;
+      }
+    } else if (a.kind === "fish") {
+      a.timer--;
+      if (a.timer <= 0) { a.timer = 60 + Math.floor(Math.random() * 100); a.vy = rand(-0.4, 0.4); if (Math.random() < 0.3) a.dir = -a.dir; }
+      var nx = a.x + a.dir * 0.9;
+      if (allWater(nx, a.y, a.w, a.h)) a.x = nx; else a.dir = -a.dir;
+      var ny = a.y + a.vy;
+      if (allWater(a.x, ny, a.w, a.h)) a.y = ny; else a.vy = -a.vy;
+    } else if (a.kind === "bird") {
+      a.phase += 0.08;
+      a.x += a.dir * 1.3;
+      a.y = a.base + Math.sin(a.phase) * 18;
+      if (a.x < 0) { a.x = 0; a.dir = 1; }
+      if (a.x > COLS * T - a.w) { a.x = COLS * T - a.w; a.dir = -1; }
+    }
+  }
+
+  function drawCreature(a) {
+    var sx = Math.round(a.x - cam.x), sy = Math.round(a.y - cam.y);
+    if (sx < -40 || sx > W + 40 || sy < -40 || sy > H + 40) return;
+    var f = a.dir === 0 ? 1 : a.dir;
+    if (a.kind === "bunny") {
+      var hx = f > 0 ? 14 : 0;
+      ctx.fillStyle = ISAIAH.bunnyColor;
+      ctx.fillRect(sx, sy + 6, 22, 12);                 // body
+      ctx.fillRect(sx + hx, sy + 2, 8, 10);             // head
+      ctx.fillRect(sx + hx + 1, sy - 6, 3, 9);          // ears
+      ctx.fillRect(sx + hx + 5, sy - 6, 3, 9);
+      ctx.fillStyle = "#f4a9b8"; ctx.fillRect(sx + hx + 2, sy - 4, 1, 5); ctx.fillRect(sx + hx + 6, sy - 4, 1, 5);
+      ctx.fillStyle = "#222"; ctx.fillRect(sx + hx + (f > 0 ? 5 : 2), sy + 5, 2, 2); // eye
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(f > 0 ? sx - 3 : sx + 20, sy + 9, 5, 5); // tail
+    } else if (a.kind === "fish") {
+      ctx.fillStyle = ISAIAH.fishColor;
+      ctx.beginPath();
+      ctx.ellipse(sx + 11, sy + 6, 9, 5, 0, 0, 7); ctx.fill();
+      ctx.beginPath();                                  // tail
+      var tx = f > 0 ? sx + 2 : sx + 20;
+      ctx.moveTo(tx, sy + 6); ctx.lineTo(tx + (f > 0 ? -6 : 6), sy); ctx.lineTo(tx + (f > 0 ? -6 : 6), sy + 12); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.fillRect(sx + (f > 0 ? 16 : 4), sy + 4, 3, 3);
+      ctx.fillStyle = "#222"; ctx.fillRect(sx + (f > 0 ? 17 : 5), sy + 5, 1, 2);
+    } else if (a.kind === "bird") {
+      ctx.fillStyle = ISAIAH.birdColor;
+      ctx.fillRect(sx + 3, sy + 4, 14, 8);              // body
+      ctx.fillRect(sx + (f > 0 ? 14 : 0), sy + 1, 6, 7);// head
+      ctx.fillStyle = "#ffb703"; ctx.fillRect(sx + (f > 0 ? 20 : -3), sy + 4, 3, 3); // beak
+      ctx.fillStyle = "#222"; ctx.fillRect(sx + (f > 0 ? 17 : 2), sy + 3, 2, 2);
+      ctx.fillStyle = ISAIAH.birdColor;
+      var flap = Math.sin(a.phase * 4) > 0 ? -8 : 4;    // wings flap
+      ctx.fillRect(sx + 6, sy + flap + (flap < 0 ? 4 : 8), 8, 4);
+    }
+  }
+
+  window.addEventListener("keydown", function (e) {
+    var k = e.key.toLowerCase();
+    keys[k] = true;
+    if (k === " " || k.indexOf("arrow") === 0) e.preventDefault();
+    if (k === " " || k === "w" || k === "arrowup") jumpBuffer = 8;
+    if (k >= "1" && k <= String(NUM_BLOCKS)) selected = parseInt(k, 10);
+    if (k === "v") { chosenKind = (chosenKind + 1) % KIND_LIST.length; say("Living thing: " + KINDS[KIND_LIST[chosenKind]].name + ". Press C to make one!"); }
+    if (k === "c") spawnAtMouse();
+    if (k === "x") breakAt(mouse);   // X also breaks the block under the mouse
+    if (k === "r") {
+      // press R twice within 3 seconds to really start over
+      if (Date.now() - lastResetPress > 3000) { lastResetPress = Date.now(); say("Press R again to erase your building and start a new world."); return; }
+      lastResetPress = 0;
+      world = freshWorld(); saveWorld(); spawnStartingCreatures();
+      player.x = (COLS / 2) * T; player.y = (GROUND - 3) * T; player.vy = 0;
+    }
+  });
+  window.addEventListener("keyup", function (e) { keys[e.key.toLowerCase()] = false; });
+
+  function canvasPos(e) {
+    var r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+  }
+  canvas.addEventListener("mousemove", function (e) { var p = canvasPos(e); mouse.x = p.x; mouse.y = p.y; });
+  // Break the block under the mouse
+  function breakAt(p) {
+    var tx = Math.floor((p.x + cam.x) / T), ty = Math.floor((p.y + cam.y) / T);
+    if (tx < 0 || tx >= COLS || ty < 0 || ty >= ROWS) return;
+    if (!inReach(tx, ty)) { say("Too far away! Walk closer to break it."); return; }
+    if (world[ty][tx] !== 0) { world[ty][tx] = 0; saveWorld(); }
+  }
+  var lastBreak = 0;
+  // Right click also arrives here (some mice and trackpads send it this way)
+  canvas.addEventListener("contextmenu", function (e) {
+    e.preventDefault();
+    if (Date.now() - lastBreak > 150) { var p = canvasPos(e); mouse.x = p.x; mouse.y = p.y; breakAt(p); lastBreak = Date.now(); }
+  });
+  canvas.addEventListener("mousedown", function (e) {
+    var p = canvasPos(e); mouse.x = p.x; mouse.y = p.y;
+    // hotbar click?
+    var slot = hotbarSlotAt(p.x, p.y);
+    if (slot) { selected = slot; return; }
+    var tx = Math.floor((p.x + cam.x) / T), ty = Math.floor((p.y + cam.y) / T);
+    // Right click, or Shift + left click, or Ctrl + left click = break
+    if (e.button === 2 || (e.button === 0 && (e.shiftKey || e.ctrlKey))) {
+      lastBreak = Date.now(); breakAt(p); return;
+    }
+    if (e.button === 0) buildAt(p);
+  });
+
+  // Place the chosen block under the mouse or finger
+  function buildAt(p) {
+    var tx = Math.floor((p.x + cam.x) / T), ty = Math.floor((p.y + cam.y) / T);
+    if (tx < 0 || tx >= COLS || ty < 0 || ty >= ROWS) return;
+    if (!inReach(tx, ty)) { say("Too far away! Walk closer to build."); return; }
+    if (world[ty][tx] !== 0) return;
+    // do not build a solid block inside the player (water is fine)
+    if (selected !== WATER) {
+      var bx = tx * T, by = ty * T;
+      if (bx < player.x + player.w && bx + T > player.x && by < player.y + player.h && by + T > player.y) return;
+    }
+    world[ty][tx] = selected; saveWorld();
+  }
+
+  // ---------------------------------------------------------------
+  // TOUCH CONTROLS (for the iPad)
+  // ---------------------------------------------------------------
+  var touch = { active: false, left: false, right: false, jump: false, breakMode: false };
+  try { if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) { touch.active = true; document.body.className = "touch"; } } catch (e) {}
+
+  // On-screen buttons, in game-screen coordinates
+  var BUTTONS = [
+    { id: "left",  x: 20,      y: H - 105, w: 85, h: 85, label: "<" },
+    { id: "right", x: 115,     y: H - 105, w: 85, h: 85, label: ">" },
+    { id: "jump",  x: W - 110, y: H - 105, w: 90, h: 90, label: "JUMP" },
+    { id: "mode",  x: W - 215, y: H - 105, w: 95, h: 90, label: "" },
+    { id: "next",  x: W - 200, y: 10,      w: 90, h: 46, label: "" },
+    { id: "make",  x: W - 100, y: 10,      w: 90, h: 46, label: "MAKE" }
+  ];
+  function buttonAt(p) {
+    for (var i = 0; i < BUTTONS.length; i++) {
+      var b = BUTTONS[i];
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return b.id;
+    }
+    return "";
+  }
+  function refreshTouchHeld(e) {
+    touch.left = touch.right = touch.jump = false;
+    for (var i = 0; i < e.touches.length; i++) {
+      var id = buttonAt(canvasPos(e.touches[i]));
+      if (id === "left") touch.left = true;
+      if (id === "right") touch.right = true;
+      if (id === "jump") touch.jump = true;
+    }
+  }
+  function onTouchStart(e) {
+    e.preventDefault();
+    if (!touch.active) { touch.active = true; document.body.className = "touch"; }
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var p = canvasPos(e.changedTouches[i]);
+      var id = buttonAt(p);
+      if (id === "jump") jumpBuffer = 8;
+      else if (id === "mode") { touch.breakMode = !touch.breakMode; say(touch.breakMode ? "Break mode: tap a block to break it" : "Build mode: tap to place a block"); }
+      else if (id === "next") { chosenKind = (chosenKind + 1) % KIND_LIST.length; say("Living thing: " + KINDS[KIND_LIST[chosenKind]].name); }
+      else if (id === "make") spawnAt(player.x + player.w / 2 + player.facing * 50, player.y + 12);
+      else if (id) { /* left/right are held, handled below */ }
+      else {
+        var slot = hotbarSlotAt(p.x, p.y);
+        if (slot) selected = slot;
+        else if (touch.breakMode) breakAt(p);
+        else buildAt(p);
+      }
+    }
+    refreshTouchHeld(e);
+  }
+  function onTouchEnd(e) { e.preventDefault(); refreshTouchHeld(e); }
+  canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+  canvas.addEventListener("touchmove", function (e) { e.preventDefault(); refreshTouchHeld(e); }, { passive: false });
+  canvas.addEventListener("touchend", onTouchEnd, { passive: false });
+  canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
+
+  function drawTouchControls() {
+    ctx.font = "bold 18px Arial"; ctx.textAlign = "center";
+    for (var i = 0; i < BUTTONS.length; i++) {
+      var b = BUTTONS[i], label = b.label, on = false, color = "rgba(20,30,45,0.55)";
+      if (b.id === "mode") { label = touch.breakMode ? "BREAK" : "BUILD"; if (touch.breakMode) color = "rgba(200,40,40,0.75)"; }
+      if (b.id === "next") label = KINDS[KIND_LIST[chosenKind]].name.toUpperCase();
+      if (b.id === "left") on = touch.left;
+      if (b.id === "right") on = touch.right;
+      if (b.id === "jump") on = touch.jump;
+      ctx.fillStyle = on ? "rgba(255,216,77,0.7)" : color;
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 3; ctx.strokeRect(b.x, b.y, b.w, b.h); ctx.lineWidth = 1;
+      ctx.fillStyle = "#fff";
+      ctx.font = (b.id === "left" || b.id === "right") ? "bold 44px Arial" : "bold 18px Arial";
+      ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2 + ((b.id === "left" || b.id === "right") ? 15 : 6));
+    }
+    ctx.textAlign = "left";
+  }
+
+  function inReach(tx, ty) {
+    var px = (player.x + player.w / 2) / T, py = (player.y + player.h / 2) / T;
+    var dx = tx + 0.5 - px, dy = ty + 0.5 - py;
+    return Math.sqrt(dx * dx + dy * dy) <= REACH;
+  }
+
+  // Hotbar layout
+  var SLOT = 52, GAP = 8;
+  var barW = NUM_BLOCKS * SLOT + (NUM_BLOCKS - 1) * GAP, barX = (W - barW) / 2, barY = H - SLOT - 14;
+  function hotbarSlotAt(x, y) {
+    for (var i = 0; i < NUM_BLOCKS; i++) {
+      var sx = barX + i * (SLOT + GAP);
+      if (x >= sx && x <= sx + SLOT && y >= barY && y <= barY + SLOT) return i + 1;
+    }
+    return 0;
+  }
+
+  // Physics
+  function collides(x, y, w, h) {
+    var x0 = Math.floor(x / T), x1 = Math.floor((x + w - 0.001) / T);
+    var y0 = Math.floor(y / T), y1 = Math.floor((y + h - 0.001) / T);
+    for (var ty = y0; ty <= y1; ty++)
+      for (var tx = x0; tx <= x1; tx++)
+        if (solidAt(tx, ty)) return true;
+    return false;
+  }
+
+  function update() {
+    tick++;
+    var left = keys["a"] || keys["arrowleft"] || touch.left, right = keys["d"] || keys["arrowright"] || touch.right;
+    var jump = keys[" "] || keys["w"] || keys["arrowup"] || touch.jump;
+    var cx = Math.floor((player.x + player.w / 2) / T), cy = Math.floor((player.y + player.h / 2) / T);
+    var swimming = blockAt(cx, cy) === WATER;
+    var speed = swimming ? ISAIAH.walkSpeed * 0.6 : ISAIAH.walkSpeed;
+    player.vx = 0;
+    if (left) { player.vx = -speed; player.facing = -1; }
+    if (right) { player.vx = speed; player.facing = 1; }
+
+    if (jumpBuffer > 0) jumpBuffer--;
+    if (swimming && jump) {
+      // swim up; hop out when the head reaches the surface
+      var headAbove = blockAt(cx, Math.floor((player.y - 6) / T));
+      player.vy = (headAbove !== WATER) ? -7 : -3.2;
+      player.onGround = false;
+    } else if ((jump || jumpBuffer > 0) && player.onGround) {
+      player.vy = -ISAIAH.jumpPower; player.onGround = false; jumpBuffer = 0;
+    }
+    player.vy += swimming ? ISAIAH.gravity * 0.3 : ISAIAH.gravity;
+    var maxFall = swimming ? 3 : 14;
+    if (player.vy > maxFall) player.vy = maxFall;
+
+    // move X
+    player.x += player.vx;
+    if (collides(player.x, player.y, player.w, player.h)) player.x -= player.vx;
+    // move Y
+    player.y += player.vy;
+    player.onGround = false;
+    if (collides(player.x, player.y, player.w, player.h)) {
+      if (player.vy > 0) {
+        player.y = Math.floor((player.y + player.h) / T) * T - player.h;
+        player.onGround = true;
+      } else {
+        player.y = Math.floor(player.y / T) * T + T;
+      }
+      player.vy = 0;
+    }
+    // keep inside the world
+    if (player.y > ROWS * T) { player.x = (COLS / 2) * T; player.y = (GROUND - 3) * T; player.vy = 0; }
+
+    // living things
+    for (var i = 0; i < creatures.length; i++) updateCreature(creatures[i]);
+    if (messageTimer > 0) messageTimer--;
+
+    // camera
+    cam.x = player.x + player.w / 2 - W / 2;
+    cam.y = player.y + player.h / 2 - H / 2 - 40;
+    cam.x = Math.max(0, Math.min(COLS * T - W, cam.x));
+    cam.y = Math.max(0, Math.min(ROWS * T - H, cam.y));
+
+    for (var j = 0; j < clouds.length; j++) {
+      clouds[j].x += 0.15 * clouds[j].s;
+      if (clouds[j].x > COLS * T + 100) clouds[j].x = -150;
+    }
+  }
+
+  function drawCloud(x, y, s) {
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.beginPath();
+    ctx.arc(x, y, 22 * s, 0, 7); ctx.arc(x + 24 * s, y - 8 * s, 28 * s, 0, 7); ctx.arc(x + 52 * s, y, 22 * s, 0, 7);
+    ctx.fill();
+  }
+
+  function drawBlock(b, sx, sy, above) {
+    var def = BLOCKS[b];
+    if (b === WATER) {
+      ctx.fillStyle = def.color;
+      ctx.fillRect(sx, sy, T, T);
+      if (above !== WATER) {   // waves on the surface
+        ctx.fillStyle = "rgba(255,255,255,0.55)";
+        var off = Math.floor(tick / 8) % 2 ? 0 : 8;
+        ctx.fillRect(sx, sy, T, 3);
+        ctx.fillRect(sx + 4 + off, sy + 6, 8, 2); ctx.fillRect(sx + 20 - off, sy + 6, 8, 2);
+      }
+      return;
+    }
+    ctx.fillStyle = def.color;
+    ctx.fillRect(sx, sy, T, T);
+    if (b === 1 || above === 0) { ctx.fillStyle = def.top; ctx.fillRect(sx, sy, T, 6); }
+    if (b === 5) { // brick lines
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.fillRect(sx, sy + 10, T, 2); ctx.fillRect(sx, sy + 21, T, 2);
+      ctx.fillRect(sx + 16, sy, 2, 10); ctx.fillRect(sx + 8, sy + 12, 2, 9); ctx.fillRect(sx + 24, sy + 12, 2, 9); ctx.fillRect(sx + 16, sy + 23, 2, 9);
+    } else if (b === 4) { // wood grain
+      ctx.fillStyle = "rgba(0,0,0,0.15)";
+      ctx.fillRect(sx + 6, sy + 4, 2, 24); ctx.fillRect(sx + 16, sy + 4, 2, 24); ctx.fillRect(sx + 25, sy + 4, 2, 24);
+    } else if (b === 3) { // stone speckles
+      ctx.fillStyle = "rgba(0,0,0,0.12)";
+      ctx.fillRect(sx + 6, sy + 8, 6, 5); ctx.fillRect(sx + 18, sy + 18, 7, 5);
+    } else if (b === 6) { // glass shine
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.fillRect(sx + 4, sy + 4, 8, 2); ctx.fillRect(sx + 4, sy + 4, 2, 8);
+    }
+    ctx.strokeStyle = "rgba(0,0,0,0.18)";
+    ctx.strokeRect(sx + 0.5, sy + 0.5, T - 1, T - 1);
+  }
+
+  function drawPlayer() {
+    var px = Math.round(player.x - cam.x), py = Math.round(player.y - cam.y);
+    // body
+    ctx.fillStyle = ISAIAH.shirtColor; ctx.fillRect(px, py + 18, player.w, 18);
+    // legs
+    ctx.fillStyle = "#274b8a"; ctx.fillRect(px + 2, py + 36, 7, 8); ctx.fillRect(px + player.w - 9, py + 36, 7, 8);
+    // head
+    ctx.fillStyle = "#f5c99b"; ctx.fillRect(px - 1, py, player.w + 2, 18);
+    // hair / hard hat
+    ctx.fillStyle = ISAIAH.hatColor; ctx.fillRect(px - 2, py - 3, player.w + 4, 7);
+    // eyes
+    ctx.fillStyle = "#222";
+    var ex = player.facing === 1 ? 12 : 4;
+    ctx.fillRect(px + ex, py + 8, 3, 4); ctx.fillRect(px + ex + 5, py + 8, 3, 4);
+  }
+
+  function draw() {
+    // sky
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, ISAIAH.skyTop); g.addColorStop(1, ISAIAH.skyBottom);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // sun
+    ctx.fillStyle = "#fff3a0"; ctx.beginPath(); ctx.arc(W - 110, 90, 44, 0, 7); ctx.fill();
+    ctx.fillStyle = "#ffe14d"; ctx.beginPath(); ctx.arc(W - 110, 90, 32, 0, 7); ctx.fill();
+    // clouds (parallax)
+    for (var i = 0; i < clouds.length; i++) drawCloud(clouds[i].x - cam.x * 0.5, clouds[i].y - cam.y * 0.2, clouds[i].s);
+
+    var x0 = Math.max(0, Math.floor(cam.x / T)), x1 = Math.min(COLS - 1, Math.floor((cam.x + W) / T));
+    var y0 = Math.max(0, Math.floor(cam.y / T)), y1 = Math.min(ROWS - 1, Math.floor((cam.y + H) / T));
+    var tx, ty, b;
+
+    // 1) solid blocks
+    for (ty = y0; ty <= y1; ty++) {
+      for (tx = x0; tx <= x1; tx++) {
+        b = world[ty][tx];
+        if (b && b !== WATER) drawBlock(b, Math.round(tx * T - cam.x), Math.round(ty * T - cam.y), ty > 0 ? world[ty - 1][tx] : 0);
+      }
+    }
+    // 2) living things and the builder (drawn before the water so they look underwater)
+    for (i = 0; i < creatures.length; i++) drawCreature(creatures[i]);
+    drawPlayer();
+    // 3) water on top, see-through
+    for (ty = y0; ty <= y1; ty++) {
+      for (tx = x0; tx <= x1; tx++) {
+        if (world[ty][tx] === WATER) drawBlock(WATER, Math.round(tx * T - cam.x), Math.round(ty * T - cam.y), ty > 0 ? world[ty - 1][tx] : 0);
+      }
+    }
+
+    // hover highlight
+    var htx = Math.floor((mouse.x + cam.x) / T), hty = Math.floor((mouse.y + cam.y) / T);
+    if (!touch.active && !hotbarSlotAt(mouse.x, mouse.y) && htx >= 0 && htx < COLS && hty >= 0 && hty < ROWS) {
+      var ok = inReach(htx, hty);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = ok ? "#ffffff" : "rgba(255,80,80,0.8)";
+      ctx.strokeRect(Math.round(htx * T - cam.x) + 1.5, Math.round(hty * T - cam.y) + 1.5, T - 3, T - 3);
+      ctx.lineWidth = 1;
+    }
+
+    // hotbar
+    for (var s = 0; s < NUM_BLOCKS; s++) {
+      var sx = barX + s * (SLOT + GAP);
+      ctx.fillStyle = "rgba(20,30,45,0.7)"; ctx.fillRect(sx, barY, SLOT, SLOT);
+      ctx.lineWidth = (s + 1 === selected) ? 4 : 2;
+      ctx.strokeStyle = (s + 1 === selected) ? "#ffd84d" : "#8ea3b8";
+      ctx.strokeRect(sx, barY, SLOT, SLOT);
+      ctx.lineWidth = 1;
+      ctx.save(); ctx.translate(sx + 10, barY + 10);
+      drawBlock(s + 1, 0, 0, 1);
+      ctx.restore();
+      ctx.fillStyle = "#fff"; ctx.font = "bold 12px Arial"; ctx.fillText(String(s + 1), sx + 4, barY + 14);
+    }
+    ctx.fillStyle = "#fff"; ctx.font = "bold 14px Arial"; ctx.textAlign = "center";
+    ctx.fillText(BLOCKS[selected].name, W / 2, barY - 8);
+
+    // living thing label (top left) and messages
+    ctx.textAlign = "left";
+    if (!touch.active) {
+      ctx.fillStyle = "rgba(20,30,45,0.6)"; ctx.fillRect(10, 10, 250, 28);
+      ctx.fillStyle = "#fff"; ctx.font = "bold 14px Arial";
+      ctx.fillText("Living thing: " + KINDS[KIND_LIST[chosenKind]].name + "  (V change, C make)", 18, 29);
+    } else {
+      drawTouchControls();
+    }
+    ctx.font = "bold 14px Arial";
+    if (messageTimer > 0) {
+      ctx.textAlign = "center"; ctx.fillStyle = "rgba(20,30,45,0.75)"; ctx.fillRect(W / 2 - 200, 50, 400, 30);
+      ctx.fillStyle = "#ffd84d"; ctx.fillText(message, W / 2, 70); ctx.textAlign = "left";
+    }
+  }
+
+  // expose a tiny hook for automated testing
+  window.__isaiahBuilds = {
+    state: function () { return { player: player, selected: selected, cam: cam }; },
+    world: function () { return world; },
+    creatures: function () { return creatures; },
+    T: T
+  };
+
+  function loop() { update(); draw(); requestAnimationFrame(loop); }
+  loop();
+})();
+</script>
+</body>
+</html>
