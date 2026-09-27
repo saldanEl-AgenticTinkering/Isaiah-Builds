@@ -24,9 +24,10 @@
   <h1>ISAIAH BUILDS</h1>
   <canvas id="game" width="960" height="540"></canvas>
   <div id="help">
-    <kbd>A</kbd><kbd>D</kbd> or arrows to move &nbsp; <kbd>Space</kbd> jump / swim up &nbsp;
-    <b>Left click</b> build &nbsp; <b>Right click</b> (or <kbd>X</kbd>) break &nbsp; <kbd>1</kbd>-<kbd>7</kbd> pick block<br>
-    <kbd>V</kbd> choose a living thing &nbsp; <kbd>C</kbd> make one where the mouse is &nbsp; <kbd>R</kbd> new world
+    <kbd>A</kbd><kbd>D</kbd> or arrows to move &nbsp; <kbd>Space</kbd> jump / swim up / let go of a vine &nbsp;
+    <b>Left click</b> build &nbsp; <b>Right click</b> (or <kbd>X</kbd>) break &nbsp; <kbd>1</kbd>-<kbd>9</kbd> pick block<br>
+    <kbd>V</kbd> choose what to make &nbsp; <kbd>C</kbd> make it where the mouse is &nbsp; <kbd>R</kbd> new world<br>
+    Walk into a hanging vine to grab it, then <kbd>A</kbd><kbd>D</kbd> to pump and swing
   </div>
 </div>
 <script>
@@ -55,19 +56,30 @@ var ISAIAH = {
   skyTop: "#5aa9e6",
   skyBottom: "#bfe6ff",
 
-  // Your seven blocks. Change the name or the color, or invent a new one!
-  blockNames:  ["Grass", "Dirt", "Stone", "Wood", "Brick", "Glass", "Water"],
-  blockColors: ["#5cb85c", "#8b5a2b", "#8a8f98", "#c98f4a", "#c1440e", "rgba(160,220,255,0.55)", "rgba(30,110,220,0.55)"],
+  // Your nine blocks. Change the name or the color, or invent a new one!
+  blockNames:  ["Grass", "Dirt", "Stone", "Wood", "Brick", "Glass", "Water", "Trunk", "Leaves"],
+  blockColors: ["#5cb85c", "#8b5a2b", "#8a8f98", "#c98f4a", "#c1440e", "rgba(160,220,255,0.55)", "rgba(30,110,220,0.55)", "#7a5230", "#4a8f3c"],
 
-  // How many living things start in the world. Try 30 fish!
+  // How many of each living thing start in the world. Try 30 fish!
   howManyBunnies: 5,
   howManyFish: 10,
   howManyBirds: 4,
+  howManyTurtles: 4,
+  howManyCrocodiles: 2,
+
+  // How many trees grow when a brand new world is made.
+  howManyTrees: 3,
+
+  // How tall a tree is (in blocks) and how long its vine hangs (in blocks).
+  treeHeight: 5,
+  vineLength: 4,
 
   // Colors of the living things
   bunnyColor: "#f4f1ea",
   fishColor: "#ff8c1a",
-  birdColor: "#e63946"
+  birdColor: "#e63946",
+  turtleColor: "#4c9a52",
+  crocodileColor: "#3f6b3a"
 };
 
 (function () {
@@ -80,8 +92,9 @@ var ISAIAH = {
   var GROUND = 20;          // the top of the island
   var SEABED = GROUND + 6;  // the floor of the sea
   var REACH = ISAIAH.buildReach; // how far (in tiles) the player can build
-  var WATER = 7;            // block number of water
-  var NUM_BLOCKS = 7;
+  var WATER = 7;             // block number of water
+  var TRUNK = 8, LEAVES = 9; // block numbers of a tree's trunk and leaves
+  var NUM_BLOCKS = 9;
 
   // Block types. 0 is empty air.
   var BLOCKS = [
@@ -92,11 +105,34 @@ var ISAIAH = {
     { name: ISAIAH.blockNames[3], color: ISAIAH.blockColors[3], top: "#a8733a" },
     { name: ISAIAH.blockNames[4], color: ISAIAH.blockColors[4], top: "#8f300a" },
     { name: ISAIAH.blockNames[5], color: ISAIAH.blockColors[5], top: "rgba(255,255,255,0.8)" },
-    { name: ISAIAH.blockNames[6], color: ISAIAH.blockColors[6], top: "rgba(255,255,255,0.6)" }
+    { name: ISAIAH.blockNames[6], color: ISAIAH.blockColors[6], top: "rgba(255,255,255,0.6)" },
+    { name: ISAIAH.blockNames[7], color: ISAIAH.blockColors[7], top: "#5a3a1e" },
+    { name: ISAIAH.blockNames[8], color: ISAIAH.blockColors[8], top: "#3f7d32" }
   ];
 
   var world = [];
-  var SAVE_KEY = "isaiah-builds-world-v2";
+  var SAVE_KEY = "isaiah-builds-world-v3";
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  // Stamp a tree's trunk and leaf blocks into a grid, above the given ground row.
+  // Returns the row of the top trunk tile on success, or -1 if there is no room.
+  function stampTree(w, tx, groundY) {
+    var trunkH = Math.max(3, Math.round(ISAIAH.treeHeight || 5));
+    var topY = groundY - trunkH;
+    if (topY < 1 || tx < 1 || tx > COLS - 2) return -1;
+    var i;
+    for (i = topY; i < groundY; i++) if (w[i][tx] !== 0) return -1;
+    for (i = topY; i < groundY; i++) w[i][tx] = TRUNK;
+    var cy = topY - 1;
+    if (cy >= 0) {
+      w[cy][tx] = LEAVES;
+      if (tx - 1 >= 0 && w[cy][tx - 1] === 0) w[cy][tx - 1] = LEAVES;
+      if (tx + 1 < COLS && w[cy][tx + 1] === 0) w[cy][tx + 1] = LEAVES;
+      if (cy - 1 >= 0 && w[cy - 1][tx] === 0) w[cy - 1][tx] = LEAVES;
+    }
+    return topY;
+  }
 
   // An island in the middle of the world, surrounded by water.
   function freshWorld() {
@@ -122,6 +158,14 @@ var ISAIAH = {
         else if (depth <= 2) w[y][x] = 2;
         else w[y][x] = 3;
       }
+    }
+    // plant a few starting trees on the island
+    var treeCount = ISAIAH.howManyTrees || 0, placed = 0, attempts = 0, ttx, gy;
+    while (placed < treeCount && attempts < 50) {
+      attempts++;
+      ttx = Math.floor(rand(center - halfWidth * 0.6, center + halfWidth * 0.6));
+      gy = 0; while (gy < ROWS && w[gy][ttx] === 0) gy++;
+      if (gy < ROWS && w[gy][ttx] === 1 && stampTree(w, ttx, gy) >= 0) placed++;
     }
     return w;
   }
@@ -149,11 +193,11 @@ var ISAIAH = {
   }
   function solidAt(tx, ty) {
     var b = blockAt(tx, ty);
-    return b !== 0 && b !== WATER;           // you can walk through air and water
+    return b !== 0 && b !== WATER && b !== LEAVES;   // you can walk through air, water and leaves
   }
 
   // Player
-  var player = { x: (COLS / 2) * T, y: (GROUND - 3) * T, w: 22, h: 44, vx: 0, vy: 0, onGround: false, facing: 1 };
+  var player = { x: (COLS / 2) * T, y: (GROUND - 3) * T, w: 22, h: 44, vx: 0, vy: 0, onGround: false, facing: 1, onVine: null, vineCooldown: 0, vineBoost: 0 };
   var selected = 1;
   var jumpBuffer = 0;
   var lastResetPress = 0;
@@ -169,18 +213,20 @@ var ISAIAH = {
   // Each kind says where it lives and how big it is.
   // ---------------------------------------------------------------
   var KINDS = {
-    bunny: { name: "Bunny", w: 22, h: 18 },
-    fish:  { name: "Fish",  w: 22, h: 12 },
-    bird:  { name: "Bird",  w: 20, h: 14 }
+    bunny:     { name: "Bunny",     w: 22, h: 18 },
+    fish:      { name: "Fish",      w: 22, h: 12 },
+    bird:      { name: "Bird",      w: 20, h: 14 },
+    turtle:    { name: "Turtle",    w: 24, h: 14 },
+    crocodile: { name: "Crocodile", w: 40, h: 16 },
+    tree:      { name: "Tree",      w: 26, h: 6 }
   };
-  var KIND_LIST = ["bunny", "fish", "bird"];
+  var KIND_LIST = ["bunny", "fish", "bird", "turtle", "crocodile", "tree"];
   var chosenKind = 0;
   var creatures = [];
-  var MAX_CREATURES = 80;
+  var MAX_CREATURES = 90;
   var message = "", messageTimer = 0;
 
   function say(text) { message = text; messageTimer = 120; }
-  function rand(a, b) { return a + Math.random() * (b - a); }
 
   function makeCreature(kind, x, y) {
     var k = KINDS[kind];
@@ -214,19 +260,100 @@ var ISAIAH = {
     for (i = 0; i < ISAIAH.howManyBirds; i++) {
       creatures.push(makeCreature("bird", rand(2, COLS - 3) * T, rand(3, 9) * T));
     }
+    for (i = 0; i < ISAIAH.howManyTurtles; i++) {
+      for (tries = 0; tries < 60; tries++) {
+        x = rand(2, COLS - 3) * T; y = rand(GROUND - 2, SEABED) * T;
+        if (!collides(x, y, KINDS.turtle.w, KINDS.turtle.h)) { creatures.push(makeCreature("turtle", x, y)); break; }
+      }
+    }
+    for (i = 0; i < ISAIAH.howManyCrocodiles; i++) {
+      for (tries = 0; tries < 60; tries++) {
+        x = rand(2, COLS - 3) * T; y = rand(GROUND + 2, SEABED - 1) * T;
+        if (allWater(x, y, KINDS.crocodile.w, KINDS.crocodile.h)) { creatures.push(makeCreature("crocodile", x, y)); break; }
+      }
+    }
   }
   spawnStartingCreatures();
 
+  // ---------------------------------------------------------------
+  // TREES AND VINES
+  // ---------------------------------------------------------------
+  var vines = [];
+
+  function makeVineAt(tx, topY) {
+    var side = vines.length % 2 === 0 ? 1 : -1;   // alternate which side the branch is on
+    vines.push({
+      ax: tx * T + T / 2 + side * T * 0.6,          // anchor x, out beside the trunk so it is easy to see
+      ay: topY * T + T * 0.8,                       // anchor y
+      len: Math.max(2, ISAIAH.vineLength || 4) * T, // how far it hangs, in pixels
+      angle: 0, angVel: 0, grabbed: false, sway: Math.random() * 10
+    });
+  }
+
+  // Look at the blocks already in the world and give every tree a vine.
+  function rebuildVinesFromWorld() {
+    vines = [];
+    for (var x = 0; x < COLS; x++) {
+      for (var y = 1; y < ROWS; y++) {
+        if (world[y][x] === TRUNK && world[y - 1][x] !== TRUNK) { makeVineAt(x, y); break; }
+      }
+    }
+  }
+  rebuildVinesFromWorld();
+
+  // Plant a tree at a spot in the world (in pixels), with a vine to swing from.
+  function placeTreeAt(wx, wy) {
+    var tx = Math.floor(wx / T);
+    if (tx < 1 || tx > COLS - 2) { say("Too close to the edge of the world."); return; }
+    var ty = Math.max(0, Math.floor(wy / T));
+    while (ty < ROWS && world[ty][tx] === 0) ty++;
+    if (ty >= ROWS || world[ty][tx] === WATER) { say("Trees need solid ground under them."); return; }
+    var topY = stampTree(world, tx, ty);
+    if (topY < 0) { say("Not enough room for a tree there."); return; }
+    saveWorld();
+    makeVineAt(tx, topY);
+    say("A tree! Walk into the vine to grab it.");
+  }
+
+  function idleSwayVine(v) {
+    v.sway += 0.02;
+    v.angle = Math.sin(v.sway) * 0.12;
+  }
+
+  // Pendulum physics for the vine the player is holding.
+  function swingVine(v) {
+    var accel = -(0.9 / (v.len / T)) * Math.sin(v.angle);
+    var left = keys["a"] || keys["arrowleft"] || touch.left;
+    var right = keys["d"] || keys["arrowright"] || touch.right;
+    if (left) accel -= 0.012;
+    if (right) accel += 0.012;
+    v.angVel += accel;
+    v.angVel *= 0.998;
+    v.angle += v.angVel;
+
+    var tipX = v.ax + Math.sin(v.angle) * v.len, tipY = v.ay + Math.cos(v.angle) * v.len;
+    player.x = tipX - player.w / 2;
+    player.y = tipY - player.h + 8;
+    player.vx = Math.cos(v.angle) * v.angVel * v.len;
+    player.vy = -Math.sin(v.angle) * v.angVel * v.len;
+    if (Math.abs(player.vx) > 0.3) player.facing = player.vx > 0 ? 1 : -1;
+
+    var jumpPressed = keys[" "] || keys["w"] || keys["arrowup"] || touch.jump;
+    if (jumpPressed) { v.grabbed = false; player.onVine = null; player.vineCooldown = 15; player.onGround = false; player.vineBoost = 16; }
+  }
+
   // Make a living thing where the mouse points
   function spawnAtMouse() { spawnAt(mouse.x + cam.x, mouse.y + cam.y); }
-  // Make a living thing centered on a spot in the world (in pixels)
+  // Make a living thing (or a tree) centered on a spot in the world (in pixels)
   function spawnAt(wx, wy) {
-    if (creatures.length >= MAX_CREATURES) { say("That is a lot of animals! No more room."); return; }
     var kind = KIND_LIST[chosenKind];
+    if (kind === "tree") { placeTreeAt(wx, wy); return; }
+    if (creatures.length >= MAX_CREATURES) { say("That is a lot of animals! No more room."); return; }
     var x = wx - KINDS[kind].w / 2, y = wy - KINDS[kind].h / 2;
     if (kind === "fish" && !allWater(x, y, KINDS.fish.w, KINDS.fish.h)) { say("Fish need water! Point at the water."); return; }
+    if (kind === "crocodile" && !allWater(x, y, KINDS.crocodile.w, KINDS.crocodile.h)) { say("Crocodiles live in the water! Point at the water."); return; }
     if (kind === "bird" && allWater(x, y, KINDS.bird.w, KINDS.bird.h)) { say("Birds fly in the sky. Point above the water."); return; }
-    if (kind !== "fish" && collides(x, y, KINDS[kind].w, KINDS[kind].h)) { say("No room there. Try an empty spot."); return; }
+    if (kind !== "fish" && kind !== "crocodile" && collides(x, y, KINDS[kind].w, KINDS[kind].h)) { say("No room there. Try an empty spot."); return; }
     creatures.push(makeCreature(kind, x, y));
   }
 
@@ -269,12 +396,36 @@ var ISAIAH = {
       a.y = a.base + Math.sin(a.phase) * 18;
       if (a.x < 0) { a.x = 0; a.dir = 1; }
       if (a.x > COLS * T - a.w) { a.x = COLS * T - a.w; a.dir = -1; }
+    } else if (a.kind === "turtle") {
+      a.timer--;
+      if (a.timer <= 0) { a.dir = [-1, 0, 1][Math.floor(Math.random() * 3)]; a.timer = 60 + Math.floor(Math.random() * 120); }
+      var turtleInWater = blockAt(Math.floor((a.x + a.w / 2) / T), Math.floor((a.y + a.h / 2) / T)) === WATER;
+      var spd = turtleInWater ? 0.55 : 0.3;
+      var tnx = a.x + a.dir * spd;
+      if (!collides(tnx, a.y, a.w, a.h)) a.x = tnx; else a.dir = -a.dir;
+      g = turtleInWater ? 0.08 : 0.5;
+      a.vy += g;
+      if (turtleInWater) a.vy = Math.max(-1.5, a.vy - 0.5); // gentle paddle
+      if (a.vy > 8) a.vy = 8;
+      a.y += a.vy; a.onGround = false;
+      if (collides(a.x, a.y, a.w, a.h)) {
+        if (a.vy > 0) { a.y = Math.floor((a.y + a.h) / T) * T - a.h; a.onGround = true; }
+        else { a.y = Math.floor(a.y / T) * T + T; }
+        a.vy = 0;
+      }
+    } else if (a.kind === "crocodile") {
+      a.timer--;
+      if (a.timer <= 0) { a.timer = 90 + Math.floor(Math.random() * 120); a.vy = rand(-0.15, 0.15); if (Math.random() < 0.25) a.dir = -a.dir; }
+      var ncx = a.x + a.dir * 0.6;
+      if (allWater(ncx, a.y, a.w, a.h)) a.x = ncx; else a.dir = -a.dir;
+      var ncy = a.y + a.vy;
+      if (allWater(a.x, ncy, a.w, a.h)) a.y = ncy; else a.vy = -a.vy;
     }
   }
 
   function drawCreature(a) {
     var sx = Math.round(a.x - cam.x), sy = Math.round(a.y - cam.y);
-    if (sx < -40 || sx > W + 40 || sy < -40 || sy > H + 40) return;
+    if (sx < -50 || sx > W + 50 || sy < -50 || sy > H + 50) return;
     var f = a.dir === 0 ? 1 : a.dir;
     if (a.kind === "bunny") {
       var hx = f > 0 ? 14 : 0;
@@ -304,6 +455,28 @@ var ISAIAH = {
       ctx.fillStyle = ISAIAH.birdColor;
       var flap = Math.sin(a.phase * 4) > 0 ? -8 : 4;    // wings flap
       ctx.fillRect(sx + 6, sy + flap + (flap < 0 ? 4 : 8), 8, 4);
+    } else if (a.kind === "turtle") {
+      var thx = f > 0 ? 20 : -4;
+      ctx.fillStyle = "#3d7a3a";
+      ctx.fillRect(sx + 2, sy + 10, 4, 3); ctx.fillRect(sx + 16, sy + 10, 4, 3); // feet
+      ctx.fillStyle = ISAIAH.turtleColor;
+      ctx.beginPath(); ctx.ellipse(sx + 12, sy + 7, 12, 7, 0, 0, 7); ctx.fill();  // shell
+      ctx.fillStyle = "#8bc36a"; ctx.fillRect(sx + thx, sy + 4, 7, 6);            // head
+      ctx.fillStyle = "#222"; ctx.fillRect(sx + thx + (f > 0 ? 4 : 1), sy + 6, 2, 2); // eye
+      ctx.strokeStyle = "rgba(0,0,0,0.3)"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.ellipse(sx + 12, sy + 7, 7, 4, 0, 0, 7); ctx.stroke();  // shell pattern
+    } else if (a.kind === "crocodile") {
+      var chx = f > 0 ? 30 : -8;
+      ctx.fillStyle = ISAIAH.crocodileColor;
+      ctx.fillRect(sx + 4, sy + 4, 32, 10);              // body
+      ctx.fillRect(sx + chx, sy + 6, 10, 6);             // snout
+      ctx.fillStyle = "#2f5233";
+      ctx.fillRect(sx + 9, sy + 1, 3, 4); ctx.fillRect(sx + 17, sy + 1, 3, 4); ctx.fillRect(sx + 25, sy + 1, 3, 4); // back ridges
+      ctx.fillStyle = "#222"; ctx.fillRect(sx + chx + (f > 0 ? 2 : 6), sy + 5, 2, 2); // eye
+      ctx.fillStyle = "#f2f2ea"; ctx.fillRect(sx + chx + (f > 0 ? 8 : 0), sy + 10, 2, 2); // tooth
+      ctx.fillStyle = ISAIAH.crocodileColor;
+      var tlx = f > 0 ? sx - 8 : sx + 44;                // tail
+      ctx.beginPath(); ctx.moveTo(tlx, sy + 8); ctx.lineTo(tlx + (f > 0 ? -8 : 8), sy + 2); ctx.lineTo(tlx + (f > 0 ? -8 : 8), sy + 14); ctx.fill();
     }
   }
 
@@ -313,14 +486,15 @@ var ISAIAH = {
     if (k === " " || k.indexOf("arrow") === 0) e.preventDefault();
     if (k === " " || k === "w" || k === "arrowup") jumpBuffer = 8;
     if (k >= "1" && k <= String(NUM_BLOCKS)) selected = parseInt(k, 10);
-    if (k === "v") { chosenKind = (chosenKind + 1) % KIND_LIST.length; say("Living thing: " + KINDS[KIND_LIST[chosenKind]].name + ". Press C to make one!"); }
+    if (k === "v") { chosenKind = (chosenKind + 1) % KIND_LIST.length; say("Make: " + KINDS[KIND_LIST[chosenKind]].name + ". Press C to make one!"); }
     if (k === "c") spawnAtMouse();
     if (k === "x") breakAt(mouse);   // X also breaks the block under the mouse
     if (k === "r") {
       // press R twice within 3 seconds to really start over
       if (Date.now() - lastResetPress > 3000) { lastResetPress = Date.now(); say("Press R again to erase your building and start a new world."); return; }
       lastResetPress = 0;
-      world = freshWorld(); saveWorld(); spawnStartingCreatures();
+      player.onVine = null;
+      world = freshWorld(); saveWorld(); spawnStartingCreatures(); rebuildVinesFromWorld();
       player.x = (COLS / 2) * T; player.y = (GROUND - 3) * T; player.vy = 0;
     }
   });
@@ -349,7 +523,6 @@ var ISAIAH = {
     // hotbar click?
     var slot = hotbarSlotAt(p.x, p.y);
     if (slot) { selected = slot; return; }
-    var tx = Math.floor((p.x + cam.x) / T), ty = Math.floor((p.y + cam.y) / T);
     // Right click, or Shift + left click, or Ctrl + left click = break
     if (e.button === 2 || (e.button === 0 && (e.shiftKey || e.ctrlKey))) {
       lastBreak = Date.now(); breakAt(p); return;
@@ -363,8 +536,8 @@ var ISAIAH = {
     if (tx < 0 || tx >= COLS || ty < 0 || ty >= ROWS) return;
     if (!inReach(tx, ty)) { say("Too far away! Walk closer to build."); return; }
     if (world[ty][tx] !== 0) return;
-    // do not build a solid block inside the player (water is fine)
-    if (selected !== WATER) {
+    // do not build a solid block inside the player (water and leaves are fine)
+    if (selected !== WATER && selected !== LEAVES) {
       var bx = tx * T, by = ty * T;
       if (bx < player.x + player.w && bx + T > player.x && by < player.y + player.h && by + T > player.y) return;
     }
@@ -410,7 +583,7 @@ var ISAIAH = {
       var id = buttonAt(p);
       if (id === "jump") jumpBuffer = 8;
       else if (id === "mode") { touch.breakMode = !touch.breakMode; say(touch.breakMode ? "Break mode: tap a block to break it" : "Build mode: tap to place a block"); }
-      else if (id === "next") { chosenKind = (chosenKind + 1) % KIND_LIST.length; say("Living thing: " + KINDS[KIND_LIST[chosenKind]].name); }
+      else if (id === "next") { chosenKind = (chosenKind + 1) % KIND_LIST.length; say("Make: " + KINDS[KIND_LIST[chosenKind]].name); }
       else if (id === "make") spawnAt(player.x + player.w / 2 + player.facing * 50, player.y + 12);
       else if (id) { /* left/right are held, handled below */ }
       else {
@@ -476,48 +649,73 @@ var ISAIAH = {
 
   function update() {
     tick++;
-    var left = keys["a"] || keys["arrowleft"] || touch.left, right = keys["d"] || keys["arrowright"] || touch.right;
-    var jump = keys[" "] || keys["w"] || keys["arrowup"] || touch.jump;
-    var cx = Math.floor((player.x + player.w / 2) / T), cy = Math.floor((player.y + player.h / 2) / T);
-    var swimming = blockAt(cx, cy) === WATER;
-    var speed = swimming ? ISAIAH.walkSpeed * 0.6 : ISAIAH.walkSpeed;
-    player.vx = 0;
-    if (left) { player.vx = -speed; player.facing = -1; }
-    if (right) { player.vx = speed; player.facing = 1; }
+    if (player.vineCooldown > 0) player.vineCooldown--;
 
-    if (jumpBuffer > 0) jumpBuffer--;
-    if (swimming && jump) {
-      // swim up; hop out when the head reaches the surface
-      var headAbove = blockAt(cx, Math.floor((player.y - 6) / T));
-      player.vy = (headAbove !== WATER) ? -7 : -3.2;
-      player.onGround = false;
-    } else if ((jump || jumpBuffer > 0) && player.onGround) {
-      player.vy = -ISAIAH.jumpPower; player.onGround = false; jumpBuffer = 0;
-    }
-    player.vy += swimming ? ISAIAH.gravity * 0.3 : ISAIAH.gravity;
-    var maxFall = swimming ? 3 : 14;
-    if (player.vy > maxFall) player.vy = maxFall;
+    if (player.onVine) {
+      swingVine(player.onVine);
+    } else {
+      var left = keys["a"] || keys["arrowleft"] || touch.left, right = keys["d"] || keys["arrowright"] || touch.right;
+      var jump = keys[" "] || keys["w"] || keys["arrowup"] || touch.jump;
+      var cx = Math.floor((player.x + player.w / 2) / T), cy = Math.floor((player.y + player.h / 2) / T);
+      var swimming = blockAt(cx, cy) === WATER;
+      var speed = swimming ? ISAIAH.walkSpeed * 0.6 : ISAIAH.walkSpeed;
+      if (left) { player.vx = -speed; player.facing = -1; player.vineBoost = 0; }
+      else if (right) { player.vx = speed; player.facing = 1; player.vineBoost = 0; }
+      else if (player.vineBoost > 0) { player.vineBoost--; player.vx *= 0.985; } // coast on after letting go of a vine
+      else { player.vx = 0; }
 
-    // move X
-    player.x += player.vx;
-    if (collides(player.x, player.y, player.w, player.h)) player.x -= player.vx;
-    // move Y
-    player.y += player.vy;
-    player.onGround = false;
-    if (collides(player.x, player.y, player.w, player.h)) {
-      if (player.vy > 0) {
-        player.y = Math.floor((player.y + player.h) / T) * T - player.h;
-        player.onGround = true;
-      } else {
-        player.y = Math.floor(player.y / T) * T + T;
+      if (jumpBuffer > 0) jumpBuffer--;
+      if (swimming && jump) {
+        // swim up; hop out when the head reaches the surface
+        var headAbove = blockAt(cx, Math.floor((player.y - 6) / T));
+        player.vy = (headAbove !== WATER) ? -7 : -3.2;
+        player.onGround = false;
+      } else if ((jump || jumpBuffer > 0) && player.onGround) {
+        player.vy = -ISAIAH.jumpPower; player.onGround = false; jumpBuffer = 0;
       }
-      player.vy = 0;
+      player.vy += swimming ? ISAIAH.gravity * 0.3 : ISAIAH.gravity;
+      var maxFall = swimming ? 3 : 14;
+      if (player.vy > maxFall) player.vy = maxFall;
+
+      // move X
+      player.x += player.vx;
+      if (collides(player.x, player.y, player.w, player.h)) player.x -= player.vx;
+      // move Y
+      player.y += player.vy;
+      player.onGround = false;
+      if (collides(player.x, player.y, player.w, player.h)) {
+        if (player.vy > 0) {
+          player.y = Math.floor((player.y + player.h) / T) * T - player.h;
+          player.onGround = true;
+        } else {
+          player.y = Math.floor(player.y / T) * T + T;
+        }
+        player.vy = 0;
+      }
+      // keep inside the world
+      if (player.y > ROWS * T) { player.x = (COLS / 2) * T; player.y = (GROUND - 3) * T; player.vy = 0; }
+
+      // try to grab a nearby vine
+      if (player.vineCooldown <= 0) {
+        for (var vJ = 0; vJ < vines.length; vJ++) {
+          var vv = vines[vJ];
+          var tipX2 = vv.ax + Math.sin(vv.angle) * vv.len, tipY2 = vv.ay + Math.cos(vv.angle) * vv.len;
+          var pcx = player.x + player.w / 2, pcy = player.y + player.h / 2;
+          var ddx = pcx - tipX2, ddy = pcy - tipY2;
+          if (ddx * ddx + ddy * ddy < 24 * 24) {
+            vv.grabbed = true;
+            vv.angVel = Math.max(-0.12, Math.min(0.12, player.vx / 60));
+            player.onVine = vv;
+            break;
+          }
+        }
+      }
     }
-    // keep inside the world
-    if (player.y > ROWS * T) { player.x = (COLS / 2) * T; player.y = (GROUND - 3) * T; player.vy = 0; }
 
     // living things
     for (var i = 0; i < creatures.length; i++) updateCreature(creatures[i]);
+    // vines: the grabbed one already moved above; the rest sway gently
+    for (var vI = 0; vI < vines.length; vI++) if (!vines[vI].grabbed) idleSwayVine(vines[vI]);
     if (messageTimer > 0) messageTimer--;
 
     // camera
@@ -568,9 +766,37 @@ var ISAIAH = {
     } else if (b === 6) { // glass shine
       ctx.fillStyle = "rgba(255,255,255,0.7)";
       ctx.fillRect(sx + 4, sy + 4, 8, 2); ctx.fillRect(sx + 4, sy + 4, 2, 8);
+    } else if (b === TRUNK) { // bark lines
+      ctx.fillStyle = "rgba(0,0,0,0.2)";
+      ctx.fillRect(sx + 5, sy + 2, 2, 28); ctx.fillRect(sx + 14, sy + 2, 2, 28); ctx.fillRect(sx + 23, sy + 2, 2, 28);
+    } else if (b === LEAVES) { // leafy dots
+      ctx.fillStyle = "rgba(0,0,0,0.12)";
+      ctx.beginPath(); ctx.arc(sx + 8, sy + 10, 4, 0, 7); ctx.arc(sx + 22, sy + 9, 4, 0, 7); ctx.arc(sx + 15, sy + 21, 4, 0, 7); ctx.fill();
     }
     ctx.strokeStyle = "rgba(0,0,0,0.18)";
     ctx.strokeRect(sx + 0.5, sy + 0.5, T - 1, T - 1);
+  }
+
+  function drawVine(v) {
+    var ax = Math.round(v.ax - cam.x), ay = Math.round(v.ay - cam.y);
+    var tipX = v.ax + Math.sin(v.angle) * v.len, tipY = v.ay + Math.cos(v.angle) * v.len;
+    var tx2 = Math.round(tipX - cam.x), ty2 = Math.round(tipY - cam.y);
+    if (Math.max(ax, tx2) < -20 || Math.min(ax, tx2) > W + 20 || Math.max(ay, ty2) < -20 || Math.min(ay, ty2) > H + 20) return;
+    ctx.strokeStyle = "#c9a15a"; ctx.lineWidth = 4; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(tx2, ty2); ctx.stroke();
+    ctx.strokeStyle = "rgba(0,0,0,0.2)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(tx2, ty2); ctx.stroke();
+    ctx.lineCap = "butt";
+    ctx.fillStyle = "#5cb85c";
+    for (var k = 0.25; k < 1; k += 0.3) {
+      var lx = ax + (tx2 - ax) * k, ly = ay + (ty2 - ay) * k;
+      ctx.beginPath(); ctx.arc(lx, ly, 5, 0, 7); ctx.fill();
+      ctx.fillStyle = "#3d9a3d"; ctx.beginPath(); ctx.arc(lx + 2, ly + 2, 3, 0, 7); ctx.fill();
+      ctx.fillStyle = "#5cb85c";
+    }
+    ctx.fillStyle = "#8b5e34";
+    ctx.beginPath(); ctx.arc(tx2, ty2, 6, 0, 7); ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.25)"; ctx.lineWidth = 1.5; ctx.stroke();
   }
 
   function drawPlayer() {
@@ -611,10 +837,12 @@ var ISAIAH = {
         if (b && b !== WATER) drawBlock(b, Math.round(tx * T - cam.x), Math.round(ty * T - cam.y), ty > 0 ? world[ty - 1][tx] : 0);
       }
     }
-    // 2) living things and the builder (drawn before the water so they look underwater)
+    // 2) vines, hanging in front of the trunk
+    for (i = 0; i < vines.length; i++) drawVine(vines[i]);
+    // 3) living things and the builder (drawn before the water so they look underwater)
     for (i = 0; i < creatures.length; i++) drawCreature(creatures[i]);
     drawPlayer();
-    // 3) water on top, see-through
+    // 4) water on top, see-through
     for (ty = y0; ty <= y1; ty++) {
       for (tx = x0; tx <= x1; tx++) {
         if (world[ty][tx] === WATER) drawBlock(WATER, Math.round(tx * T - cam.x), Math.round(ty * T - cam.y), ty > 0 ? world[ty - 1][tx] : 0);
@@ -647,12 +875,12 @@ var ISAIAH = {
     ctx.fillStyle = "#fff"; ctx.font = "bold 14px Arial"; ctx.textAlign = "center";
     ctx.fillText(BLOCKS[selected].name, W / 2, barY - 8);
 
-    // living thing label (top left) and messages
+    // "what to make" label (top left) and messages
     ctx.textAlign = "left";
     if (!touch.active) {
-      ctx.fillStyle = "rgba(20,30,45,0.6)"; ctx.fillRect(10, 10, 250, 28);
+      ctx.fillStyle = "rgba(20,30,45,0.6)"; ctx.fillRect(10, 10, 260, 28);
       ctx.fillStyle = "#fff"; ctx.font = "bold 14px Arial";
-      ctx.fillText("Living thing: " + KINDS[KIND_LIST[chosenKind]].name + "  (V change, C make)", 18, 29);
+      ctx.fillText("Make: " + KINDS[KIND_LIST[chosenKind]].name + "  (V change, C make)", 18, 29);
     } else {
       drawTouchControls();
     }
@@ -668,6 +896,9 @@ var ISAIAH = {
     state: function () { return { player: player, selected: selected, cam: cam }; },
     world: function () { return world; },
     creatures: function () { return creatures; },
+    vines: function () { return vines; },
+    setKind: function (k) { chosenKind = KIND_LIST.indexOf(k); },
+    spawnAt: function (wx, wy) { spawnAt(wx, wy); },
     T: T
   };
 
